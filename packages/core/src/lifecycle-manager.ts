@@ -266,7 +266,7 @@ function buildTransitionObservabilityData(
   statusTransition: boolean,
   reaction?: { key: string; result: ReactionResult | null },
 ): Record<string, unknown> {
-  return {
+  const data: Record<string, unknown> = {
     oldStatus,
     newStatus,
     statusTransition,
@@ -291,6 +291,18 @@ function buildTransitionObservabilityData(
     reactionSuccess: reaction?.result?.success ?? null,
     escalated: reaction?.result?.escalated ?? null,
   };
+
+  if (newStatus === "killed") {
+    const reasons: string[] = [];
+    if (next.session.reason) reasons.push(next.session.reason);
+    if (next.runtime.reason && next.runtime.reason !== "process_running") {
+      reasons.push(next.runtime.reason);
+    }
+    data.killReason = reasons.length > 0 ? reasons.join("; ") : "unknown";
+    data.killSource = evidence;
+  }
+
+  return data;
 }
 
 export interface LifecycleManagerDeps {
@@ -1771,11 +1783,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // so the config controls which notifiers receive each priority level.
         if (!reactionHandledNotify) {
           const priority = inferPriority(eventType);
+          const eventData: Record<string, unknown> = { oldStatus, newStatus };
+          if (newStatus === "killed") {
+            eventData.killReason = primaryLifecycleReason(session.lifecycle);
+            eventData.evidence = assessment.evidence;
+          }
           const event = createEvent(eventType, {
             sessionId: session.id,
             projectId: session.projectId,
-            message: `${session.id}: ${oldStatus} → ${newStatus}`,
-            data: { oldStatus, newStatus },
+            message:
+              newStatus === "killed"
+                ? `${session.id}: ${oldStatus} → killed (${primaryLifecycleReason(session.lifecycle)})`
+                : `${session.id}: ${oldStatus} → ${newStatus}`,
+            data: eventData,
           });
           await notifyHuman(event, priority);
         }
